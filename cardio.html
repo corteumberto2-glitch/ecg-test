@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Test Microfono ECG</title>
+<style>
+body{font-family:system-ui,sans-serif;padding:20px;max-width:500px;margin:auto;background:#f8f9fa}
+h1{color:#005691;font-size:1.2rem}
+button{background:#005691;color:#fff;border:none;padding:16px;border-radius:30px;font-size:1rem;font-weight:bold;width:100%;margin:10px 0;cursor:pointer}
+button:active{background:#003d66}
+#log{background:#fff;border:1px solid #ccc;border-radius:8px;padding:10px;font-family:monospace;font-size:0.75rem;height:200px;overflow-y:auto;white-space:pre-wrap}
+.meter{height:30px;background:#eee;border-radius:15px;overflow:hidden;margin:10px 0}
+.meter-bar{height:100%;background:linear-gradient(90deg,#4caf50,#ff9800,#f44336);width:0%;transition:width 0.05s}
+.ok{color:#2e7d32;font-weight:bold}
+.err{color:#c62828;font-weight:bold}
+</style>
+</head>
+<body>
+<h1>🎤 Test Microfono Reale</h1>
+<div class="meter"><div class="meter-bar" id="bar"></div></div>
+<button id="btn">AVVIA MICROFONO</button>
+<div id="log">In attesa...</div>
+
+<script>
+const btn = document.getElementById('btn');
+const logEl = document.getElementById('log');
+const bar = document.getElementById('bar');
+let audioCtx, analyser, dataArray, running = false, rafId;
+
+function log(msg, cls='') {
+  const t = new Date().toLocaleTimeString();
+  logEl.innerHTML += `<span class="${cls}">[${t}] ${msg}</span>\n`;
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+// Diagnostica iniziale
+log('Protocollo: ' + location.protocol);
+log('Secure context: ' + (window.isSecureContext ? 'SI ✓' : 'NO ✗'));
+log('getUserMedia: ' + (navigator.mediaDevices?.getUserMedia ? 'disponibile ✓' : 'ASSENTE ✗'));
+
+btn.onclick = async () => {
+  if (running) {
+    stop();
+    return;
+  }
+
+  logEl.innerHTML = '';
+  log('=== AVVIO ===', 'ok');
+
+  // Controllo 1: secure context
+  if (!window.isSecureContext) {
+    log('ERRORE: serve HTTPS!', 'err');
+    log('Apri questa pagina da https:// oppure localhost', 'err');
+    alert('❌ Serve HTTPS!\n\nIl microfono funziona SOLO su:\n• https://...\n• http://localhost\n\nNon su file://');
+    return;
+  }
+
+  // Controllo 2: API disponibile
+  if (!navigator.mediaDevices?.getUserMedia) {
+    log('ERRORE: API non disponibile', 'err');
+    return;
+  }
+
+  try {
+    log('Richiesta permesso microfono...');
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: false,
+        noiseSuppression: false,
+        autoGainControl: false,
+        channelCount: 1
+      }
+    });
+    log('✓ Permesso concesso!', 'ok');
+
+    // Mostra info stream
+    const track = stream.getAudioTracks()[0];
+    log('Dispositivo: ' + track.label);
+    log('Stato: ' + track.readyState);
+
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === 'suspended') await audioCtx.resume();
+    log('AudioContext: ' + audioCtx.state);
+    log('Sample rate: ' + audioCtx.sampleRate + ' Hz');
+
+    const source = audioCtx.createMediaStreamSource(stream);
+    analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 1024;
+    source.connect(analyser);
+    dataArray = new Uint8Array(analyser.frequencyBinCount);
+
+    running = true;
+    btn.textContent = '⏹ FERMA';
+    measure();
+
+  } catch (err) {
+    log('ERRORE: ' + err.name, 'err');
+    log('Messaggio: ' + err.message, 'err');
+    if (err.name === 'NotAllowedError') {
+      log('→ Hai negato il permesso. Tocca il lucchetto 🔒 nella barra indirizzi e abilita il microfono.', 'err');
+    } else if (err.name === 'NotFoundError') {
+      log('→ Nessun microfono trovato sul dispositivo.', 'err');
+    } else if (err.name === 'NotReadableError') {
+      log('→ Microfono occupato da un\'altra app. Chiudi altre app e riprova.', 'err');
+    }
+  }
+};
+
+function measure() {
+  if (!running) return;
+  analyser.getByteTimeDomainData(dataArray);
+  let sum = 0;
+  for (let i = 0; i < dataArray.length; i++) {
+    const v = (dataArray[i] - 128) / 128;
+    sum += v * v;
+  }
+  const rms = Math.sqrt(sum / dataArray.length);
+  const percent = Math.min(rms * 400, 100);
+  bar.style.width = percent + '%';
+  rafId = requestAnimationFrame(measure);
+}
+
+function stop() {
+  running = false;
+  cancelAnimationFrame(rafId);
+  if (audioCtx) audioCtx.close();
+  btn.textContent = 'AVVIA MICROFONO';
+  bar.style.width = '0%';
+  log('=== FERMATO ===');
+}
+</script>
+</body>
+</html>
